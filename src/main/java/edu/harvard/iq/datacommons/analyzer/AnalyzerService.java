@@ -53,7 +53,7 @@ public class AnalyzerService {
             List<List<String>> samples = new ArrayList<>();
 
             CSVFormat format = CSVFormat.DEFAULT;
-            if (file.toString().endsWith(".tab") || file.toString().endsWith(".tab.csv")) {
+            if (file.toString().endsWith(".tab")) {
                 format = CSVFormat.TDF;
             }
 
