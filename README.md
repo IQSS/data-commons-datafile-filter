@@ -1,4 +1,4 @@
-# Location and Time Analyzer (LangChain4j)
+# Data Commons datafiles filter
 
 A Java-based application that uses LLMs (via LangChain4j and Ollama) to analyze data files (`.csv` and `.tab`) and identify variables containing location and time/date information.
 
