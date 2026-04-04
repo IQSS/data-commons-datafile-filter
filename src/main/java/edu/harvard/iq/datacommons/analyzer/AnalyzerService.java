@@ -11,6 +11,8 @@ import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -20,10 +22,12 @@ public class AnalyzerService {
 
     private final OllamaChatModel chatModel;
     private final String searchRoot;
+    private final String outputDirectory;
 
     public AnalyzerService(OllamaChatModel chatModel, String searchRoot) {
         this.chatModel = chatModel;
         this.searchRoot = searchRoot;
+        this.outputDirectory = "DataCommonsReady-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
     }
 
     public void run() throws Exception {
@@ -123,7 +127,7 @@ public class AnalyzerService {
     private void copyToDataCommonsReady(Path file) throws IOException {
         Path root = Paths.get(searchRoot);
         Path relativePath = root.relativize(file);
-        Path target = Paths.get("DataCommonsReady").resolve(relativePath);
+        Path target = Paths.get(outputDirectory).resolve(relativePath);
 
         System.out.println("Copying to: " + target);
         Files.createDirectories(target.getParent());

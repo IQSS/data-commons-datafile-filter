@@ -52,13 +52,13 @@ mvn exec:java -Dexec.mainClass="edu.harvard.iq.datacommons.analyzer.Application"
 3. **LLM Analysis**: For each column, it sends a prompt to the Ollama model (using LangChain4j) containing the column label and sample values.
 4. **Classification**: The LLM responds with `YES` or `NO` to classify if the column represents a location or time/date.
 5. **Results**: The application prints the analysis results for each file to the console.
-6. **Copying**: If a file is identified as having both a location and a time/date variable, it is copied to a new directory named `DataCommonsReady`.
-    - The original directory structure is preserved within `DataCommonsReady`.
-    - For example, if `data/subdir/file.csv` meets the requirements, it will be copied to `DataCommonsReady/subdir/file.csv`.
+6. **Copying**: If a file is identified as having both a location and a time/date variable, it is copied to a new directory named `DataCommonsReady-<timestamp>` (e.g. `DataCommonsReady-20240315-103000`).
+    - The original directory structure is preserved within this directory.
+    - For example, if `data/subdir/file.csv` meets the requirements, it will be copied to `DataCommonsReady-<timestamp>/subdir/file.csv`.
 
 ## Output Directory
 
-The `DataCommonsReady` directory will contain all files that are deemed "compliant" (containing both Location and Time data). This is useful for downstream processing that requires these specific dimensions.
+The `DataCommonsReady-<timestamp>` directory will contain all files that are deemed "compliant" (containing both Location and Time data). This is useful for downstream processing that requires these specific dimensions.
 
 ## Project Structure
 
