@@ -12,7 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Level;
@@ -147,24 +147,142 @@ public class AnalyzerService {
             "geo", "location", "place", "territory", "continent"
     );
 
-    private static final Set<String> KNOWN_NON_LOCATION_PATTERNS = Set.of(
-            "resentment", "resent", "sentiment", "opinion", "score", "index",
-            "callable", "putable", "qualified", "status", "insurance"
+    private static final Set<String> BOOLEAN_VALUES = Set.of(
+            "yes", "no", "true", "false", "y", "n", "0", "1"
     );
 
-    private boolean isLocation(String label, List<String> values) {
-        String lowerLabel = label.toLowerCase().replaceAll("[^a-z0-9]", "");
+    private static final Set<String> LIKERT_VALUES = Set.of(
+            "1", "2", "3", "4", "5"
+    );
 
-        // Quick reject: labels that contain known non-location patterns
-        for (String pattern : KNOWN_NON_LOCATION_PATTERNS) {
-            if (lowerLabel.contains(pattern)) {
-                logger.info("  isLocation(" + label + ") -> NO (known non-location pattern)");
-                return false;
+    private static final Set<String> GEO_KEYWORD_VALUES = Set.of(
+            "state", "county", "city", "country", "region", "province", "district", "municipality"
+    );
+
+    private static final class ValueProfile {
+        boolean mostlyBoolean;
+        boolean mostlyLikert;
+        boolean mostlyNumeric;
+        boolean hasGeoLikeText;
+    }
+
+    private ValueProfile profileValues(List<String> values) {
+        ValueProfile profile = new ValueProfile();
+        if (values == null || values.isEmpty()) {
+            return profile;
+        }
+
+        int nonEmpty = 0;
+        int booleanCount = 0;
+        int likertCount = 0;
+        int numericCount = 0;
+        int geoTextCount = 0;
+        Set<String> distinct = new HashSet<>();
+
+        for (String raw : values) {
+            String normalized = normalizeValue(raw);
+            if (normalized.isEmpty()) {
+                continue;
+            }
+
+            nonEmpty++;
+            String lower = normalized.toLowerCase();
+            distinct.add(lower);
+
+            if (BOOLEAN_VALUES.contains(lower)) {
+                booleanCount++;
+            }
+
+            if (LIKERT_VALUES.contains(lower)) {
+                likertCount++;
+            }
+
+            if (isNumeric(lower)) {
+                numericCount++;
+            }
+
+            if (looksLikeGeoText(lower)) {
+                geoTextCount++;
             }
         }
 
-        // Quick accept: labels that exactly match known location terms
+        if (nonEmpty == 0) {
+            return profile;
+        }
+
+        profile.mostlyBoolean = ((double) booleanCount / nonEmpty) >= 0.8;
+        profile.mostlyLikert = ((double) likertCount / nonEmpty) >= 0.8 && distinct.size() <= 7;
+        profile.mostlyNumeric = ((double) numericCount / nonEmpty) >= 0.8;
+        profile.hasGeoLikeText = geoTextCount > 0;
+        return profile;
+    }
+
+    private String normalizeValue(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replaceAll("^\\\"|\\\"$", "").trim();
+    }
+
+    private boolean isNumeric(String value) {
+        try {
+            Double.parseDouble(value);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private boolean looksLikeGeoText(String lowerValue) {
+        if (KNOWN_LOCATION_LABELS.contains(lowerValue)) {
+            return true;
+        }
+
+        if (lowerValue.length() >= 3 && lowerValue.matches("[a-z ]+") && !isNumeric(lowerValue)) {
+            for (String keyword : GEO_KEYWORD_VALUES) {
+                if (lowerValue.contains(keyword)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean hasLocationLabelSignal(String lowerLabel) {
         if (KNOWN_LOCATION_LABELS.contains(lowerLabel)) {
+            return true;
+        }
+
+        for (String locationLabel : KNOWN_LOCATION_LABELS) {
+            if (lowerLabel.startsWith(locationLabel) || lowerLabel.endsWith(locationLabel)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean isLocation(String label, List<String> values) {
+        String lowerLabel = label.toLowerCase().replaceAll("[^a-z0-9]", "");
+        ValueProfile profile = profileValues(values);
+
+        // Quick reject by value profile for non-location fields
+        if (profile.mostlyLikert && !hasLocationLabelSignal(lowerLabel)) {
+            logger.info("  isLocation(" + label + ") -> NO (Likert-like values)");
+            return false;
+        }
+        if (profile.mostlyBoolean && !profile.hasGeoLikeText) {
+            logger.info("  isLocation(" + label + ") -> NO (boolean/flag values)");
+            return false;
+        }
+        if (profile.mostlyNumeric && !profile.hasGeoLikeText && !lowerLabel.contains("fips") && !lowerLabel.contains("zip") && !lowerLabel.contains("postal")) {
+            logger.info("  isLocation(" + label + ") -> NO (mostly numeric values without geo evidence)");
+            return false;
+        }
+
+        // Quick accept: labels that exactly match known location terms
+        if (hasLocationLabelSignal(lowerLabel)) {
             logger.info("  isLocation(" + label + ") -> YES (known location label)");
             return true;
         }
@@ -198,20 +316,13 @@ public class AnalyzerService {
             "created", "updated", "datetime", "period", "semester", "week"
     );
 
-    private static final Set<String> KNOWN_NON_TIME_PATTERNS = Set.of(
-            "resentment", "resent", "sentiment", "opinion", "score", "index",
-            "cost", "price", "amount", "rate", "yield", "coupon"
-    );
-
     private boolean isTime(String label, List<String> values) {
         String lowerLabel = label.toLowerCase().replaceAll("[^a-z0-9]", "");
+        ValueProfile profile = profileValues(values);
 
-        // Quick reject: labels that contain known non-time patterns
-        for (String pattern : KNOWN_NON_TIME_PATTERNS) {
-            if (lowerLabel.contains(pattern)) {
-                logger.info("  isTime(" + label + ") -> NO (known non-time pattern)");
-                return false;
-            }
+        if (profile.mostlyLikert && !lowerLabel.contains("year")) {
+            logger.info("  isTime(" + label + ") -> NO (Likert-like values)");
+            return false;
         }
 
         // Quick accept: labels that match known time terms (check if label contains a known time term)
