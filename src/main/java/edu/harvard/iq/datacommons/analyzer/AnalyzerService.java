@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -27,6 +28,7 @@ public class AnalyzerService {
     private final OllamaChatModel chatModel;
     private final String searchRoot;
     private final String outputDirectory;
+    private final List<String> selectionLog = new ArrayList<>();
 
     public AnalyzerService(OllamaChatModel chatModel, String searchRoot, String timestamp) {
         this.chatModel = chatModel;
@@ -52,11 +54,22 @@ public class AnalyzerService {
                 }
             }
         }
+        writeSelectionLog();
     }
 
     private void analyzeFile(Path file) throws IOException {
         logger.info("Analyzing file: " + file);
         try {
+            List<String> locationVariables = new ArrayList<>();
+            List<String> timeVariables = new ArrayList<>();
+
+            // Filename based time detection as fallback
+            String fileName = file.getFileName().toString().toLowerCase();
+            if (fileName.matches(".*[12][0-9]{3}.*")) {
+                timeVariables.add("[filename pattern]");
+                logger.info("Found time/date signal in filename: " + fileName);
+            }
+
             List<String> headers = new ArrayList<>();
             List<List<String>> samples = new ArrayList<>();
 
@@ -86,9 +99,6 @@ public class AnalyzerService {
                 return;
             }
 
-            boolean hasLocation = false;
-            boolean hasTime = false;
-
             for (int i = 0; i < headers.size(); i++) {
                 String label = headers.get(i);
                 final int index = i;
@@ -100,31 +110,48 @@ public class AnalyzerService {
                 if (values.isEmpty()) continue;
 
                 if (isLocation(label, values)) {
-                    if (!hasLocation) {
-                        hasLocation = true;
-                        logger.info("Found location variable: " + label);
-                    }
+                    locationVariables.add(label);
+                    logger.info("Found location variable: " + label);
                 }
                 if (isTime(label, values)) {
-                    if (!hasTime) {
-                        hasTime = true;
-                        logger.info("Found time/date variable: " + label);
-                    }
+                    timeVariables.add(label);
+                    logger.info("Found time/date variable: " + label);
                 }
             }
+
+            boolean hasLocation = !locationVariables.isEmpty();
+            boolean hasTime = !timeVariables.isEmpty();
 
             if (hasLocation && hasTime) {
                 logger.info("RESULT: File " + file.getFileName() + " meets requirements (Has Location AND Time).");
                 copyToDataCommonsReady(file);
+                
+                String logEntry = String.format("File: %s\n - Location variables: %s\n - Time variables: %s\n",
+                        file.getFileName(), locationVariables, timeVariables);
+                selectionLog.add(logEntry);
             } else {
                 logger.info("RESULT: File " + file.getFileName() + " DOES NOT meet requirements.");
                 if (!hasLocation) logger.info(" - Missing Location");
                 if (!hasTime) logger.info(" - Missing Time/Date");
             }
-
         } catch (IOException e) {
             logger.log(Level.SEVERE, "Error reading file " + file, e);
             throw e;
+        }
+    }
+
+    private void writeSelectionLog() {
+        if (selectionLog.isEmpty()) {
+            return;
+        }
+
+        Path logFile = Paths.get(outputDirectory, "selection_log.txt");
+        try {
+            Files.createDirectories(logFile.getParent());
+            Files.write(logFile, selectionLog, java.nio.charset.StandardCharsets.UTF_8);
+            logger.info("Selection log written to: " + logFile);
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "Failed to write selection log", e);
         }
     }
 
@@ -143,7 +170,7 @@ public class AnalyzerService {
             "lat", "latitude", "long", "longitude", "lon",
             "countrycode", "country_code", "iso3", "iso2", "fips", "statefip", "statefips",
             "zipcode", "zip", "postalcode", "postal_code", "address",
-            "departamento", "provincia", "distrito", "municipality",
+            "departamento", "provincia", "distrito", "municipality", "pueblo", "nomb",
             "geo", "location", "place", "territory", "continent"
     );
 
@@ -158,6 +185,12 @@ public class AnalyzerService {
     private static final Set<String> GEO_KEYWORD_VALUES = Set.of(
             "state", "county", "city", "country", "region", "province", "district", "municipality"
     );
+
+//    private static final Set<String> COUNTRY_NAME_HINTS = Set.of(
+//            "argentina", "brasil", "brazil", "mexico", "méxico", "colombia", "chile", "peru", "perú",
+//            "venezuela", "ecuador", "bolivia", "paraguay", "uruguay", "costa rica", "cuba", "guatemala",
+//            "honduras", "el salvador", "nicaragua", "panama", "panamá", "republica dominicana", "república dominicana"
+//    );
 
     private static final class ValueProfile {
         boolean mostlyBoolean;
@@ -249,6 +282,98 @@ public class AnalyzerService {
         return false;
     }
 
+    private String normalizeAsciiLower(String value) {
+        return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .trim();
+    }
+
+    private boolean isIsoLikeCountryCode(String value) {
+        String normalized = normalizeValue(value);
+        return normalized.matches("[A-Z]{3}") || normalized.matches("[a-z]{3}");
+    }
+
+    private boolean hasValueDrivenLocationSignal(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return false;
+        }
+
+        int nonEmpty = 0;
+        int countryNameCount = 0;
+        int isoCodeCount = 0;
+        int geoTextCount = 0;
+
+        for (String raw : values) {
+            String normalized = normalizeValue(raw);
+            if (normalized.isEmpty()) {
+                continue;
+            }
+
+            nonEmpty++;
+            String asciiLower = normalizeAsciiLower(normalized);
+//            if (COUNTRY_NAME_HINTS.contains(asciiLower)) {
+//                countryNameCount++;
+//            }
+            if (isIsoLikeCountryCode(normalized)) {
+                isoCodeCount++;
+            }
+            if (looksLikeGeoText(asciiLower)) {
+                geoTextCount++;
+            }
+        }
+
+        if (nonEmpty < 3) {
+            return false;
+        }
+
+        double countryNameRatio = (double) countryNameCount / nonEmpty;
+        double isoCodeRatio = (double) isoCodeCount / nonEmpty;
+        double geoTextRatio = (double) geoTextCount / nonEmpty;
+
+        return countryNameRatio >= 0.6 || isoCodeRatio >= 0.6 || geoTextRatio >= 0.6;
+    }
+
+    private boolean isLikelyYearValue(String value) {
+        String normalized = normalizeValue(value);
+        if (!normalized.matches("\\d{4}")) {
+            return false;
+        }
+
+        int year = Integer.parseInt(normalized);
+        return year >= 1800 && year <= 2100;
+    }
+
+    private boolean hasValueDrivenTimeSignal(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return false;
+        }
+
+        int nonEmpty = 0;
+        int yearLikeCount = 0;
+        Set<String> distinctYears = new HashSet<>();
+
+        for (String raw : values) {
+            String normalized = normalizeValue(raw);
+            if (normalized.isEmpty()) {
+                continue;
+            }
+
+            nonEmpty++;
+            if (isLikelyYearValue(normalized)) {
+                yearLikeCount++;
+                distinctYears.add(normalized);
+            }
+        }
+
+        if (nonEmpty < 3) {
+            return false;
+        }
+
+        double yearLikeRatio = (double) yearLikeCount / nonEmpty;
+        return yearLikeRatio >= 0.8 && distinctYears.size() >= 2;
+    }
+
     private boolean hasLocationLabelSignal(String lowerLabel) {
         if (KNOWN_LOCATION_LABELS.contains(lowerLabel)) {
             return true;
@@ -276,7 +401,13 @@ public class AnalyzerService {
             logger.info("  isLocation(" + label + ") -> NO (boolean/flag values)");
             return false;
         }
-        if (profile.mostlyNumeric && !profile.hasGeoLikeText && !lowerLabel.contains("fips") && !lowerLabel.contains("zip") && !lowerLabel.contains("postal")) {
+
+        if (hasValueDrivenLocationSignal(values)) {
+            logger.info("  isLocation(" + label + ") -> YES (value-driven location signal)");
+            return true;
+        }
+
+        if (profile.mostlyNumeric && !profile.hasGeoLikeText && !hasLocationLabelSignal(lowerLabel)) {
             logger.info("  isLocation(" + label + ") -> NO (mostly numeric values without geo evidence)");
             return false;
         }
@@ -305,6 +436,10 @@ public class AnalyzerService {
                 "- The values are numeric scores (1, 2, 3, 4, 5) not geographic codes\n\n" +
                 "Answer ONLY 'YES' or 'NO'.",
                 label, values.toString());
+        if (chatModel == null) {
+            logger.info("  isLocation(" + label + ") -> NO (no chat model available)");
+            return false;
+        }
         String response = chatModel.generate(prompt);
         logger.info("  isLocation(" + label + ") -> " + response.trim());
         return response.trim().toUpperCase().startsWith("YES");
@@ -313,7 +448,7 @@ public class AnalyzerService {
     private static final Set<String> KNOWN_TIME_LABELS = Set.of(
             "year", "date", "time", "timestamp", "month", "quarter", "day",
             "issuedate", "maturitydate", "startdate", "enddate", "birthdate",
-            "created", "updated", "datetime", "period", "semester", "week"
+            "created", "updated", "datetime", "period", "semester", "week", "fecha", "ano"
     );
 
     private boolean isTime(String label, List<String> values) {
@@ -323,6 +458,11 @@ public class AnalyzerService {
         if (profile.mostlyLikert && !lowerLabel.contains("year")) {
             logger.info("  isTime(" + label + ") -> NO (Likert-like values)");
             return false;
+        }
+
+        if (hasValueDrivenTimeSignal(values)) {
+            logger.info("  isTime(" + label + ") -> YES (value-driven year pattern)");
+            return true;
         }
 
         // Quick accept: labels that match known time terms (check if label contains a known time term)
@@ -351,6 +491,10 @@ public class AnalyzerService {
                 "- The variable is a score, count, amount, price, or identifier\n\n" +
                 "Answer ONLY 'YES' or 'NO'.",
                 label, values.toString());
+        if (chatModel == null) {
+            logger.info("  isTime(" + label + ") -> NO (no chat model available)");
+            return false;
+        }
         String response = chatModel.generate(prompt);
         logger.info("  isTime(" + label + ") -> " + response.trim());
         return response.trim().toUpperCase().startsWith("YES");

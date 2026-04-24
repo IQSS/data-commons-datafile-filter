@@ -45,6 +45,25 @@ Alternatively, if you've already compiled:
 mvn exec:java -Dexec.mainClass="edu.harvard.iq.datacommons.analyzer.Application"
 ```
 
+### Overriding Configuration
+
+You can override any property defined in `application.properties` by passing it as a system property (using `-D`) on the command line:
+
+```bash
+java -Dollama.model=llama3 -Danalyzer.search-root=/path/to/data -jar target/data-commons-datafile-filter-1.0-SNAPSHOT-jar-with-dependencies.jar
+```
+
+Or when running via Maven:
+
+```bash
+mvn exec:java -Dollama.model=llama3 -Danalyzer.search-root=/path/to/data
+```
+
+The supported properties are:
+- `ollama.url`
+- `ollama.model`
+- `analyzer.search-root`
+
 ## How it Works
 
 1. **Scanning**: The `AnalyzerService` walks the directory tree starting from `analyzer.search-root`.
@@ -58,7 +77,10 @@ mvn exec:java -Dexec.mainClass="edu.harvard.iq.datacommons.analyzer.Application"
 
 ## Output Directory
 
-The `DataCommonsReady-<timestamp>` directory will contain all files that are deemed "compliant" (containing both Location and Time data). This is useful for downstream processing that requires these specific dimensions.
+The `DataCommonsReady-<timestamp>` directory will contain:
+1. All files that are deemed "compliant" (containing both Location and Time data). The original directory structure is preserved.
+2. `selection_log.txt`: A log file detailing for each selected file all variables that contributed to its selection (location variables and time/date variables).
+3. `DataCommonsReady-<timestamp>.log`: The full application execution log.
 
 ## Project Structure
 

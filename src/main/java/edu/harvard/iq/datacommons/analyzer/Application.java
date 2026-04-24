@@ -24,14 +24,14 @@ public class Application {
                 }
             }
 
-            String baseUrl = props.getProperty("ollama.url", "http://localhost:11434");
-            String modelName = props.getProperty("ollama.model", "llama3.2");
-            String searchRoot = props.getProperty("analyzer.search-root", "data");
+            String baseUrl = System.getProperty("ollama.url", props.getProperty("ollama.url", "http://localhost:11434"));
+            String modelName = System.getProperty("ollama.model", props.getProperty("ollama.model", "llama3.2"));
+            String searchRoot = System.getProperty("analyzer.search-root", props.getProperty("analyzer.search-root", "data"));
 
             OllamaChatModel model = OllamaChatModel.builder()
                     .baseUrl(baseUrl)
                     .modelName(modelName)
-                    .temperature(0.0)
+                    .temperature(0.1)
                     .build();
 
             AnalyzerService service = new AnalyzerService(model, searchRoot, timestamp);
